@@ -1,0 +1,622 @@
+
+################
+### packages ###
+################
+
+
+library("ChAMP")
+library("stringr")
+library("EnhancedVolcano")
+library("tidyverse")
+library("hrbrthemes")
+library("GenomicRanges")
+library("ggplot2")
+library("pheatmap")
+library("RColorBrewer")
+library("viridis")
+library("dendsort")
+
+###########
+### DMP ###
+###########
+
+myLoad <- champ.load("C:/Users/Public/DataForAnalysis/EpiEdit/MethylArray/RawData",arraytype="EPIC")
+myLoad$pd
+myNorm <- champ.norm(beta=myLoad$beta,arraytype="EPIC",cores=8)
+myDMP <- champ.DMP(beta = myNorm,pheno=myLoad$pd$Sample_Group,arraytype="EPIC")
+head(myDMP[[1]]$gene)
+
+#########################
+### for average score ###
+#########################
+
+AllAve_KAL <- apply(myNorm[,c("mh-2","mh-4","mh-5")], 1, mean)
+AllAve_NN  <- apply(myNorm[,c("mh-1","mh-3")], 1, mean)
+AllAve_F2  <- apply(myNorm[,c("mh-16","mh-9")], 1, mean)
+
+###############################
+### off target prediction #####
+###############################
+
+data(probe.features.epic)
+nrow(probe.features)
+
+FilteredProbes <- probe.features[ rownames(probe.features) %in% rownames(myNorm) , c("CHR","MAPINFO","Strand","gene","feature","cgi")] 
+levels(FilteredProbes$CHR)
+FilteredProbes$CHR <- as.factor(as.character(FilteredProbes$CHR))
+FilteredProbes$CHR <- paste0("chr", FilteredProbes$CHR)
+FilteredProbes$CHR <- as.factor(as.character(FilteredProbes$CHR))
+head(FilteredProbes$CHR)
+levels(FilteredProbes$CHR)
+
+gr_FilteredProbes<- GRanges(seqname = FilteredProbes$CHR,
+                            ranges  = IRanges(start= FilteredProbes$MAPINFO,width=1),
+                            strand  = c("*"),
+                            genes   = FilteredProbes$gene,
+                            feature = FilteredProbes$feature,
+                            cgi     = FilteredProbes$cgi,
+                            probe_ID = as.factor(rownames(FilteredProbes)) )
+head(gr_FilteredProbes)
+
+
+###########################
+### find nearest probes ###
+###########################
+
+offtarget_folder <- "C:/Users/Public/DataForAnalysis/EpiEdit/MethylArray/gRNA_offtarget_bedfiles/"
+
+limit_of_distance <- 4000
+
+#sgRNA_names <- c("MyoG_promotor")
+sgRNA_names <- c("pj3","pj6","pj7","pj8")
+
+offtargets_8mer_probes  <- as.factor(vector())
+offtargets_12mer_probes <- as.factor(vector())
+offtargets_20mer_probes <- as.factor(vector())
+
+for (k in c(8,12,20)) {
+  
+  offtargets_all <- as.factor(vector())
+  offtargets_probes <- as.factor(vector())
+  
+  for ( i in sgRNA_names) {
+
+    print("***************************")
+    print(paste0("offtarget genes for ",i," ; ",k, "mer"))
+    
+    offtarget_input <- paste0(offtarget_folder,i,"_",k,"mer_crisprdir_result.bed")
+    #print(offtarget_input)
+    
+    offtargets <- read.delim(file = offtarget_input, header=F, sep="\t",skip = 1)
+    
+    if (length(offtargets) == 1 ) {
+      rm(offtargets)
+      print(paste0("total site number  = 0"))
+      print(paste0("total probe number = 0"))
+      print(paste0("total gene number  = 0"))
+      }
+    else {
+    
+    print(paste0("total site number  = ", nrow(offtargets)))    
+    
+    colnames(offtargets)[1:3] <- c("CHR","start","end")
+    offtargets <- offtargets[offtargets$CHR %in% levels(FilteredProbes$CHR),]
+    gr_offtargets <- GRanges(seqname = offtargets$CHR,
+                             ranges  = IRanges(start = offtargets$start, end = offtargets$end),
+                             strand  = "*" )
+    #head(gr_offtargets)
+    
+    
+    gr_offtargets$distance <- mcols(distanceToNearest(gr_offtargets,gr_FilteredProbes))$distance
+    gr_offtargets <- gr_offtargets[gr_offtargets$distance < ( limit_of_distance / 2 ),]
+    nearest_offtargets <- nearest(gr_offtargets,gr_FilteredProbes)
+    nearest_offtargets <- unique(nearest_offtargets)
+    nearest_offtargets <- nearest_offtargets[!(nearest_offtargets == "")]
+    
+    nearest_offtargets_genes <- mcols(gr_FilteredProbes[nearest_offtargets])$genes
+    nearest_offtargets_genes <- unique(nearest_offtargets_genes)
+    nearest_offtargets_genes <- nearest_offtargets_genes[!(nearest_offtargets_genes == "")]
+    #print(head(nearest_offtargets_genes))
+    
+    print(paste0("total probe number = ", length(gr_FilteredProbes[nearest_offtargets])))
+    print(paste0("total gene number  = ", length(nearest_offtargets_genes)))
+    
+    write.table (unique(mcols(gr_FilteredProbes[nearest_offtargets])$genes), 
+                 file = paste0("offtargets_",i,"_",k,"mer_nearest_dis_",limit_of_distance,".txt"), 
+                 sep = "\t",
+                 quote = FALSE, 
+                 row.names = FALSE,
+                 col.names = FALSE)
+
+    offtargets_probes <- c(offtargets_probes, mcols(gr_FilteredProbes[nearest_offtargets])$probe_ID)
+    offtargets_all <- c(offtargets_all, mcols(gr_FilteredProbes[nearest_offtargets])$genes)
+      
+    rm(offtarget_input)
+    rm(offtargets)
+    rm(gr_offtargets)
+    rm(nearest_offtargets)
+    rm(nearest_offtargets_genes)
+    
+    }
+  }
+  
+  print("------------------------------")
+  
+  offtargets_probes <- unique(offtargets_probes)
+  offtargets_probes <- offtargets_probes[!(offtargets_probes == "")]
+  assign(paste0("offtargets_",k,"mer_probes"), offtargets_probes)
+  print(paste0("total probe number = ", length(offtargets_probes)))
+  
+  offtargets_all <- unique(offtargets_all)
+  offtargets_all <- offtargets_all[!(offtargets_all == "")]
+  print(paste0("all offtarget genes = ", length(offtargets_all)))
+  
+  write.table (offtargets_all, 
+               file = paste0("offtargets_",k,"mer_nearest_all.txt"), 
+               sep = "\t",
+               quote = FALSE, 
+               row.names = FALSE,
+               col.names = FALSE  )
+
+  rm(offtargets_all)
+  rm(offtargets_probes)
+  
+  print("***************************")
+  
+}
+
+print("length(offtargets_8mer_probes)")
+print(length(offtargets_8mer_probes))
+
+print("length(offtargets_12mer_probes)")
+print(length(offtargets_12mer_probes))
+
+print("length(offtargets_20mer_probes)")
+print(length(offtargets_20mer_probes))
+
+
+
+
+################################
+### find probes within range ###
+################################
+
+offtarget_folder <- "C:/Users/Public/DataForAnalysis/EpiEdit/MethylArray/gRNA_offtarget_bedfiles/"
+
+### file names : "[sgRNA_names]_[k]mer_crisprdir_result.bed"
+
+#limit_of_distance <- 4000
+#limit_of_distance <- 1000
+limit_of_distance <- 500
+
+#sgRNA_names <- c("MyoG_promotor")
+sgRNA_names <- c("pj3","pj6","pj7","pj8")
+
+offtargets_8mer_probes  <- as.factor(vector())
+offtargets_12mer_probes <- as.factor(vector())
+offtargets_20mer_probes <- as.factor(vector())
+
+for (k in c(8,12,20)) {
+
+  print(paste0(k, "mer_offtargets"))
+  
+  ov_probes_all <- as.vector(vector())
+  ov_genes_all  <- as.vector(vector())
+  
+  offtargets_all <- as.factor(vector())
+  offtargets_probes <- as.factor(vector())
+  
+  for ( i in sgRNA_names) {
+
+    print("***************************")
+
+    print(paste0("offtarget genes for gRNA ",i," ; ",k,"mer_offtarget"))
+    
+    offtarget_input <- paste0(offtarget_folder,i,"_",k,"mer_crisprdir_result.bed")
+    #print(offtarget_input)
+    
+    offtargets <- read.delim(file = offtarget_input, header=F, sep="\t",skip = 1)
+    
+    if (length(offtargets) == 1 ) {
+      rm(offtargets)
+      print(paste0("total site number  = 0"))
+      print(paste0("total probe number = 0"))
+      print(paste0("total gene number  = 0"))
+    }
+    else {
+      
+      print(paste0("total site number  = ", nrow(offtargets)))    
+      
+      colnames(offtargets)[1:3] <- c("CHR","start","end")
+      offtargets <- offtargets[offtargets$CHR %in% levels(FilteredProbes$CHR),]
+      gr_offtargets <- GRanges(seqname = offtargets$CHR,
+                               ranges  = IRanges(start = offtargets$start, end = offtargets$end),
+                               strand  = "*" )
+      #head(gr_offtargets)
+
+      gr_offtargets <- resize(gr_offtargets, width = 2*limit_of_distance, fix="center")
+      #print(head(findOverlaps(gr_offtargets,gr_FilteredProbes), 10))
+  
+      ov_probes <- findOverlaps(gr_offtargets,gr_FilteredProbes)
+      ov_probes <- subjectHits(ov_probes)
+      ov_probes <- unique(ov_probes)
+      ov_probes <- ov_probes[!is.na(ov_probes)]
+      ov_probes <- ov_probes[!(ov_probes == "")]
+      print(paste0("# off-target probes; ",length(ov_probes)))
+  
+      ov_genes <- unique(mcols(gr_FilteredProbes[ov_probes])$genes)
+      ov_genes <- ov_genes[!is.na(ov_genes)]
+      ov_genes <- ov_genes[!(ov_genes == "")]
+      print(paste0("# off-target genes; ",length(ov_genes)))
+      print(head(ov_genes))
+  
+      write.table (ov_genes, 
+                   file = paste0("offtargets_",i,"_",k,"mer_range_dis_",limit_of_distance,".txt"), 
+                   sep = "\t",
+                   quote = FALSE, 
+                   row.names = FALSE,
+                   col.names = FALSE )
+
+      ov_probes_all <- c(ov_probes_all,ov_probes)
+      ov_genes_all  <- c(ov_genes_all,ov_genes)
+  
+      rm(ov_probes)
+      rm(ov_genes)
+      rm(gr_offtargets)
+      rm(offtargets)
+    }
+  }
+  
+  print("------- total --------")
+  
+  print(paste0("# all off-target probes with redundancy; ",length(ov_probes_all)))
+  ov_probes_all <- unique(ov_probes_all)
+  ov_probes_all <- ov_probes_all[!is.na(ov_probes_all)]
+  ov_probes_all <- ov_probes_all[!(ov_probes_all == "")]
+  print(paste0("# all off-target probes; ",length(ov_probes_all)))
+  offtargets_probes <- mcols(gr_FilteredProbes[ov_probes_all])$probe_ID
+  
+  ov_probes_all_genes <- mcols(gr_FilteredProbes[unique(ov_probes_all)])$genes
+  ov_probes_all_genes <- unique(ov_probes_all_genes)
+  ov_probes_all_genes <- ov_probes_all_genes[!is.na(ov_probes_all_genes)]
+  ov_probes_all_genes <- ov_probes_all_genes[!(ov_probes_all_genes == "")]
+  #print(paste0("# all off-target genes; ",length(ov_probes_all_genes)))
+
+  #print(paste0("# all off-target genes; ",length(unique(ov_genes_all))))
+  ov_genes_all <- unique(ov_genes_all)
+  ov_genes_all <- ov_genes_all[!is.na(ov_genes_all)]
+  ov_genes_all <- ov_genes_all[!(ov_genes_all == "")]
+  print(paste0("# all off-target genes; ",length(ov_genes_all)))
+  offtargets_genes  <- ov_genes_all
+
+  assign(paste0("offtargets_",k,"mer_probes"), offtargets_probes)
+  assign(paste0("offtargets_",k,"mer_genes"),  offtargets_genes)
+
+  rm(ov_probes_all)
+  rm(offtargets_probes)
+  rm(ov_probes_all_genes)
+  rm(ov_genes_all)
+  rm(offtargets_genes)
+  
+  print("*********************")
+  
+  }
+
+print(paste0("# offtargets_8mer_probes; ", length(offtargets_8mer_probes)))
+print(paste0("# offtargets_12mer_probes; ", length(offtargets_12mer_probes)))
+print(paste0("# offtargets_12mer_probes; ", length(offtargets_20mer_probes)))
+
+print("*********************")
+
+
+
+##############################
+### heatmap for offtargets ###
+##############################
+
+
+pval = 0.05
+cutoff = 0.2
+mer = 8
+t = 7
+
+x <- read.table(file="C:/Users/Mitsuru/Desktop/dCas9-RNAseq-211025-genespring/30_HTSeq_STAR_TPM_protein_coding.txt", header=T, sep='\t')
+x <- x[ , !(colnames(x)=="gene_id")]
+head(x)
+
+DUX4targets <- read.delim("C:/Users/Mitsuru/Desktop/dCas9-RNAseq-211025-genespring/DUX4targets.txt", header=F, sep="\t")
+head(DUX4targets)
+DUX4targets <- unlist(DUX4targets)
+head(DUX4targets)
+
+MyPair <- myDMP[[1]]
+MyTitle <- paste(str_sub(names(MyPair[,c(7,8)]), end = -5), collapse = "vs")
+print(MyTitle)
+
+TPM1=c(TPM_min = 0,   TPM_max = 50,    cellheight = 4)
+TPM2=c(TPM_min = 50,  TPM_max = 10000, cellheight = 10)
+TPM3=c(TPM_min = 0,   TPM_max = 100,   cellheight = 4)
+TPM4=c(TPM_min = 100, TPM_max = 10000, cellheight = 10)
+TPM5=c(TPM_min = 1,   TPM_max = 10000, cellheight = 6)
+TPM6=c(TPM_min = 5,   TPM_max = 10000, cellheight = 4)
+TPM7=c(TPM_min = 10,  TPM_max = 10000, cellheight = 3)
+
+#for ( t in c(1,2,3,4)) {
+
+
+TPM= eval(parse(text= paste0("TPM",t)))
+
+TPM_min = TPM["TPM_min"]
+TPM_max = TPM["TPM_max"]
+cellheight = TPM["cellheight"]
+
+offtargets_probes <- eval(parse(text= paste0("offtargets_",mer,"mer_probes")))
+
+MyPair <- MyPair[ (MyPair$adj.P.Val < pval ) ,]
+MyPair <- MyPair[ rownames(MyPair) %in% offtargets_probes , ]
+du <- MyPair[ (MyPair[,7] - MyPair[,8] > cutoff ) ,]$gene
+tu <- data.frame(table(du))
+colnames(tu)[1] <- "gene"
+tu <- tu[order(tu$Freq,decreasing=TRUE),]
+tu <- tu[-1,]
+tuoff <- tu[tu$Freq>0,]$gene
+print(paste0("# of tuoff; ", length(tuoff)))
+
+nrow(x)
+xSelect <- x[ !(x$gene_name %in% DUX4targets) , ]
+nrow(xSelect)
+xSelect <- x[x$gene_name %in% tuoff , ]
+nrow(xSelect)
+xSelect <- xSelect[(xSelect$N_1 + xSelect$N_2)/2 >= TPM_min & (xSelect$N_1 + xSelect$N_2)/2 < TPM_max, ]
+nrow(xSelect)
+
+xmat <- as.matrix(xSelect[,-1])
+rownames(xmat) <- xSelect$gene_name
+head(xmat)
+
+# Grouping 
+col_groups <- substr(colnames(xmat), 1, 1) 
+table(col_groups)
+
+# Data frame with column annotations.
+mat_col <- data.frame(group = col_groups)
+rownames(mat_col) <- colnames(xmat)
+
+# List with colors for each annotation.
+mat_colors <- list(group = brewer.pal(2, "Set2"))
+mat_colors <- list(group = c("red", "blue"))
+names(mat_colors$group) <- unique(col_groups)
+
+
+### log2 scale relative
+
+xmat_rel_log2 <-  xmat
+xmat_rel_log2[,1] <-  ifelse(xmat[,3] == 0, NA, log2(xmat[,1]/xmat[,3]))
+xmat_rel_log2[,2] <-  ifelse(xmat[,4] == 0, NA, log2(xmat[,2]/xmat[,4]))
+xmat_rel_log2[,3] <-  ifelse(xmat[,3] == 0, NA, log2(xmat[,3]/xmat[,3]))
+xmat_rel_log2[,4] <-  ifelse(xmat[,4] == 0, NA, log2(xmat[,4]/xmat[,4]))
+head(xmat_rel_log2,3)
+#xmat_rel[which(xmat_rel == Inf, TRUE)] <- NaN
+
+## ----quantile-color-breaks-----------------------------------------------
+#quantile_breaks <- function(xs, n = 10) {
+# breaks <- quantile(xs, probs = seq(0, 1, length.out = n))
+#  breaks[!duplicated(breaks)]
+#}
+#xmat_rel_breaks <- quantile_breaks(xmat_rel, n = 1000)
+mat_rel_breaks <- seq(-5, 5, length.out = 1000)
+
+# sorting clusters
+sort_hclust <- function(...) as.hclust(dendsort(as.dendrogram(...)))
+
+# col order
+xmat_rel_log2_col_ordered <- xmat_rel_log2[,c(1,3,2,4)]
+
+# row order
+#mat_cluster_rows <- hclust(dist(xmat_rel))
+#mat_cluster_rows <- sort_hclust(mat_cluster_rows)
+#plot(mat_cluster_rows, main = "Sorted Dendrogram", xlab = "", sub = "")
+
+
+#heatmap
+my_heatmap <- pheatmap(
+  mat               = xmat_rel_log2_col_ordered,
+  color             = cividis(1000),
+  breaks            = mat_rel_breaks,
+  border_color      = NA,
+  cluster_cols      = FALSE,
+  cluster_rows      = FALSE,   #mat_cluster_rows,
+  treeheight_row    = 0,
+  show_colnames     = FALSE,
+  show_rownames     = TRUE,
+  annotation_col    = mat_col,
+  annotation_colors = mat_colors,
+  drop_levels       = TRUE,
+  fontsize          = 3,
+  cellwidth         = 20, 
+  cellheight        = cellheight,
+  main              = paste0( TPM_min, " =< TPM < ", TPM_max, " in Neg" ) ,
+  gaps_cols         = 2
+)
+
+my_heatmap
+
+save_pheatmap_png <- function(x, filename, width=1000, height=2000, res = 400) {
+  png(filename, width = width, height = height, res = res)
+  grid::grid.newpage()
+  grid::grid.draw(x$gtable)
+  dev.off()
+}
+
+save_pheatmap_png(my_heatmap, paste0("offtarget_",mer,
+                                     "mer_cutoff_",cutoff,
+                                     "_TPM_",TPM_min,
+                                     "_",TPM_max,
+                                     "_rel_log2_heatmap.png"))
+
+
+#}
+write.table (rownames(xmat_rel_log2_col_ordered), 
+             file = paste0("offtarget_gene_list_for_heatmap.txt"), 
+             sep = "\t",
+             quote = FALSE,
+             row.names = FALSE,
+             col.names = FALSE)
+
+rm(MyPair)
+rm(du)
+rm(tu)
+rm(tuoff)
+rm(offtargets_probes)
+rm(xSelect)
+rm(xmat)
+rm(xmat_rel_log2)
+rm(xmat_rel_log2_col_ordered)
+rm(mat_rel_breaks)
+rm(sort_hclust)
+rm(my_heatmap)
+
+
+
+################
+### dot plot ###
+################
+
+
+#for ( k in c(8,12)) {
+
+  k=812
+
+  #pval   = 0.01
+  pval   = 0.05
+  cutoff = 0.2
+  
+  print("*****************")
+  print(paste0("cutoff: ", cutoff))
+  print("*****************")
+  
+  MyPair <- myDMP[[1]]
+  MyTitle <- paste(str_sub(names(MyPair[,c(7,8)]), end = -5), collapse = "vs")
+  print(MyTitle)
+  du <- MyPair[MyPair$deltaBeta < - cutoff & (MyPair$adj.P.Val < pval ),]
+  dd <- MyPair[MyPair$deltaBeta > cutoff & (MyPair$adj.P.Val < pval ),]
+  AllProbes <- cbind(eval(parse(text = paste0("AllAve_", str_sub(names(MyPair[7]), end = -5)))),
+                     eval(parse(text = paste0("AllAve_", str_sub(names(MyPair[8]), end = -5)))))
+  AllProbes <- as.data.frame(AllProbes)
+  colnames(AllProbes) <- c(paste0("Ave_", str_sub(names(MyPair[7]), end = -5)),
+                           paste0("Ave_", str_sub(names(MyPair[8]), end = -5)))
+  head(AllProbes,3)
+  nrow(du)
+  nrow(dd)
+  
+############## count #################
+  nrow(myNorm)
+  nrow(MyPair)
+  nrow(MyPair[(MyPair$adj.P.Val < pval ),])
+  nrow(MyPair[(MyPair$adj.P.Val > pval ),])
+  
+  nrow(MyPair)
+  nrow(MyPair[MyPair$deltaBeta < - cutoff ,])
+  nrow(MyPair[MyPair$deltaBeta > cutoff ,])
+  nrow(MyPair[(MyPair$deltaBeta < cutoff) & (MyPair$deltaBeta > - cutoff) ,])
+
+  nrow(MyPair[                                (rownames(MyPair) %in% offtargets_12mer_probes) ,])
+  nrow(MyPair[MyPair$deltaBeta < - cutoff   & (rownames(MyPair) %in% offtargets_12mer_probes) ,])
+  nrow(MyPair[MyPair$deltaBeta > cutoff     & (rownames(MyPair) %in% offtargets_12mer_probes) ,])
+  nrow(MyPair[(MyPair$deltaBeta < cutoff) & 
+              (MyPair$deltaBeta > - cutoff) & (rownames(MyPair) %in% offtargets_12mer_probes) ,])
+
+  nrow(MyPair[                                (rownames(MyPair) %in% offtargets_8mer_probes) ,])
+  nrow(MyPair[MyPair$deltaBeta < - cutoff   & (rownames(MyPair) %in% offtargets_8mer_probes) ,])
+  nrow(MyPair[MyPair$deltaBeta > cutoff     & (rownames(MyPair) %in% offtargets_8mer_probes) ,])
+  nrow(MyPair[(MyPair$deltaBeta < cutoff) & 
+              (MyPair$deltaBeta > - cutoff) & (rownames(MyPair) %in% offtargets_8mer_probes) ,])
+
+############## percentage #################
+  print("*********************")  
+  
+  100 * nrow(MyPair[(rownames(MyPair) %in% offtargets_12mer_probes) ,])  / nrow(MyPair)
+　100 * nrow(MyPair[MyPair$deltaBeta < - cutoff   & (rownames(MyPair) %in% offtargets_12mer_probes) ,]) / nrow(MyPair[MyPair$deltaBeta < - cutoff ,])
+  100 * nrow(MyPair[MyPair$deltaBeta > cutoff     & (rownames(MyPair) %in% offtargets_12mer_probes) ,]) / nrow(MyPair[MyPair$deltaBeta > cutoff ,])
+  100 * nrow(MyPair[(MyPair$deltaBeta < cutoff) & 
+                    (MyPair$deltaBeta > - cutoff) & (rownames(MyPair) %in% offtargets_12mer_probes) ,]) / nrow(MyPair[(MyPair$deltaBeta < cutoff) & (MyPair$deltaBeta > - cutoff) ,])
+
+  print("*********************")
+  
+  100 * nrow(MyPair[(rownames(MyPair) %in% offtargets_8mer_probes) ,])  / nrow(MyPair)
+  100 * nrow(MyPair[MyPair$deltaBeta < - cutoff   & (rownames(MyPair) %in% offtargets_8mer_probes) ,])  / nrow(MyPair[MyPair$deltaBeta < - cutoff ,])
+  100 * nrow(MyPair[MyPair$deltaBeta > cutoff     & (rownames(MyPair) %in% offtargets_8mer_probes) ,])  / nrow(MyPair[MyPair$deltaBeta > cutoff ,])
+  100 * nrow(MyPair[(MyPair$deltaBeta < cutoff) & (MyPair$deltaBeta > - cutoff)
+                     & (rownames(MyPair) %in% offtargets_8mer_probes) ,])  / nrow(MyPair[(MyPair$deltaBeta < cutoff) & (MyPair$deltaBeta > - cutoff) ,])
+  
+  print("*********************")  
+
+######################################  
+    
+  #offtargets_probes <- as.factor(eval(parse(text = paste0("offtargets_",k,"mer_probes"))))
+  #AllProbes$groups <- ifelse( rownames(AllProbes) %in% offtargets_probes, "nearest-offtargets", "ns")
+  
+  #AllProbes$groups[is.na(groups)] <- "ns"
+  #AllProbes$groups <- factor(AllProbes$groups, levels = c("nearest-offtargets", "ns"))
+  #AllProbes <- AllProbes[order(AllProbes$groups, decreasing=TRUE),]
+  
+  #colors <- c(alpha("red", 0.8),
+  #            alpha("grey40", 0.1))
+  #sizes  <- c(1,
+  #            0.1)
+  
+  AllProbes$groups <- ifelse( rownames(AllProbes) %in% offtargets_12mer_probes, "12mer",
+                              ifelse( rownames(AllProbes) %in% offtargets_8mer_probes, "8mer", "ns"))
+  
+  AllProbes$groups[is.na(AllProbes$groups)] <- "ns"
+  AllProbes$groups <- factor(AllProbes$groups, levels = c("ns","8mer","12mer"))
+  AllProbes <- AllProbes[order(AllProbes$groups),]
+  
+  colors <- c(alpha("grey50", 0.1),
+              alpha("blue", 0.6),
+              alpha("red", 1))
+  sizes  <- c(1,
+              1,
+              2)
+  
+  
+  # plot
+  png(paste0("Offtarget_",
+             k,
+             "mer_",
+             MyTitle,
+             "_alldots_cof_",
+             cutoff,
+             ".png"),
+      width     = 1000,
+      height    = 1000
+  )
+  
+  p <- plot(x = AllProbes[,2], 
+            y = AllProbes[,1],
+            xlim=c(0,1), 
+            ylim=c(0,1), 
+            asp=1,
+            pch=16, 
+            cex= sizes[AllProbes$groups],  #0.1, 
+            col= colors[AllProbes$groups],  
+            xlab= str_sub(names(MyPair[8]), end = -5), 
+            ylab= str_sub(names(MyPair[7]), end = -5),
+            #main= paste0("All probes")
+  )
+  p
+  abline( a = cutoff, b = 1, col="black", lwd=2, lty=2)
+  abline( a = - cutoff, b = 1, col="black", lwd=2, lty=2)
+  abline( a = 0, b = 1, col="black", lwd=0.5, lty=1)
+  dev.off()
+  rm(p)
+  
+  rm(du)
+  rm(dd)
+  
+#}
+
+
+###################################################
+#####################################################
+
