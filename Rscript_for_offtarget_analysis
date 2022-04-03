@@ -320,11 +320,11 @@ cutoff = 0.2
 mer = 8
 t = 7
 
-x <- read.table(file="C:/Users/Mitsuru/Desktop/dCas9-RNAseq-211025-genespring/30_HTSeq_STAR_TPM_protein_coding.txt", header=T, sep='\t')
+x <- read.table(file="30_HTSeq_STAR_TPM_protein_coding.txt", header=T, sep='\t')
 x <- x[ , !(colnames(x)=="gene_id")]
 head(x)
 
-DUX4targets <- read.delim("C:/Users/Mitsuru/Desktop/dCas9-RNAseq-211025-genespring/DUX4targets.txt", header=F, sep="\t")
+DUX4targets <- read.delim("DUX4targets.txt", header=F, sep="\t")
 head(DUX4targets)
 DUX4targets <- unlist(DUX4targets)
 head(DUX4targets)
